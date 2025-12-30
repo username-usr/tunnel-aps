@@ -17,8 +17,8 @@ export const useChat = (password: string) => {
 
   useEffect(() => {
     if (!roomId) return;
-    cleanupOldMessages(); //
-    db.messages.where('roomId').equals(roomId).sortBy('timestamp').then(setMessages); //
+    cleanupOldMessages();
+    db.messages.where('roomId').equals(roomId).sortBy('timestamp').then(setMessages);
     
     db.profiles.get('me').then(p => {
       const name = p?.name || HEROES[Math.floor(Math.random() * HEROES.length)];
@@ -48,7 +48,8 @@ export const useChat = (password: string) => {
           config: {
             iceServers: [
               { urls: 'stun:stun.l.google.com:19302' },
-              { urls: 'stun:stun1.l.google.com:19302' }
+              { urls: 'stun:stun1.l.google.com:19302' },
+              { urls: 'stun:stun2.l.google.com:19302' },
             ]
           }
         });
@@ -65,7 +66,7 @@ export const useChat = (password: string) => {
           return () => clearInterval(interval);
         });
 
-        peer.on('connection', setupConn); //
+        peer.on('connection', setupConn);
 
         peer.on('error', (err) => {
           if ((err.type === 'unavailable-id') && !isSecondary) {
@@ -76,31 +77,71 @@ export const useChat = (password: string) => {
       }, delay);
     };
 
-    function setupConn(c: DataConnection) {
-      c.on('open', () => {
+    async function setupConn(c: DataConnection) {
+      c.on('open', async () => {
         setConn(c);
         setIsOnline(true);
         c.send({ type: 'name-sync', name: myHero });
+
+        // Phase 1: Send my local history to peer
+        const myLocalHistory = await db.messages.where('roomId').equals(roomId).toArray();
+        c.send({ type: 'history-sync', payload: myLocalHistory });
       });
 
       c.on('data', async (data: any) => {
         if (data.type === 'name-sync') setPeerHero(data.name);
+        
         if (data.type === 'kill-signal') {
           await db.messages.where('roomId').equals(roomId).delete();
           localStorage.removeItem('chat_p_pass');
           window.location.reload();
         }
+
+        // Live Message Receipt
         if (data.type === 'msg') {
-          const newMsg: Message = { ...data.payload, roomId, sender: 'peer', status: 'read' }; //
-          await db.messages.add(newMsg);
-          setMessages(prev => [...prev, newMsg]);
+          const newMsg: Message = { ...data.payload, roomId, sender: 'peer', status: 'read' };
+          const exists = await db.messages.get(newMsg.id);
+          if (!exists) {
+            await db.messages.add(newMsg);
+            setMessages(prev => [...prev, newMsg]);
+          }
           c.send({ type: 'read-receipt', id: data.payload.id });
         }
-        if (data.type === 'read-receipt') {
-          setMessages(prev => prev.map(m => m.id === data.id ? { ...m, status: 'read' } : m));
-          db.messages.update(data.id, { status: 'read' });
+
+        // History Sync & Bulk Acknowledgment
+        if (data.type === 'history-sync') {
+          let receivedIds: string[] = [];
+          for (const remoteMsg of data.payload) {
+            const exists = await db.messages.get(remoteMsg.id);
+            if (!exists) {
+              await db.messages.add({ ...remoteMsg, sender: 'peer', status: 'read' });
+            }
+            // Always collect the ID to acknowledge we have it now
+            if (remoteMsg.id) receivedIds.push(remoteMsg.id);
+          }
+          
+          // Send back bulk receipt so the other person sees double ticks
+          if (receivedIds.length > 0) {
+            c.send({ type: 'bulk-read-receipt', ids: receivedIds });
+          }
+          
+          db.messages.where('roomId').equals(roomId).sortBy('timestamp').then(setMessages);
+        }
+
+        // Handle Read Receipts (Single & Bulk)
+        if (data.type === 'read-receipt' || data.type === 'bulk-read-receipt') {
+          const idsToUpdate = data.type === 'bulk-read-receipt' ? data.ids : [data.id];
+          
+          for (const id of idsToUpdate) {
+            await db.messages.update(id, { status: 'read' });
+          }
+          
+          setMessages(prev => prev.map(m => 
+            idsToUpdate.includes(m.id) ? { ...m, status: 'read' } : m
+          ));
         }
       });
+
       c.on('close', () => setIsOnline(false));
     }
 
@@ -109,11 +150,22 @@ export const useChat = (password: string) => {
   }, [password, myHero, roomId]);
 
   const sendMessage = async (content: string) => {
-    if (!conn?.open || !roomId) return;
-    const msg: Message = { id: crypto.randomUUID(), roomId, content, timestamp: Date.now(), sender: 'me', status: 'sent' };
-    conn.send({ type: 'msg', payload: msg });
-    await db.messages.add(msg); //
+    if (!roomId) return;
+    const msg: Message = { 
+      id: crypto.randomUUID(), 
+      roomId, 
+      content, 
+      timestamp: Date.now(), 
+      sender: 'me', 
+      status: 'sent' 
+    };
+
+    await db.messages.add(msg);
     setMessages(prev => [...prev, msg]);
+
+    if (conn?.open) {
+      conn.send({ type: 'msg', payload: msg });
+    }
   };
 
   return { isOnline, messages, sendMessage, peerHero, myHero, killChat };

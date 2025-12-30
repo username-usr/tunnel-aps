@@ -104,7 +104,7 @@ export default function App() {
             onKeyDown={(e) => e.key === 'Enter' && inputText.trim() && (sendMessage(inputText), setInputText(''))}
           />
           <button 
-            disabled={!isOnline || !inputText.trim()}
+            disabled={!inputText.trim()}
             onClick={() => {sendMessage(inputText); setInputText('');}}
             className="w-14 h-14 bg-[#818cf8] rounded-2xl flex items-center justify-center text-white hover:bg-[#6366f1] disabled:opacity-5 active:scale-95 transition-all shadow-lg shadow-indigo-500/20"
           >

@@ -32,7 +32,7 @@ export default function App() {
               <input 
                 type="password" 
                 placeholder="Enter room key"
-                className="w-full p-5 rounded-2xl bg-black text-white border border-white/5 focus:border-white/20 outline-none transition-all placeholder:text-white/10 text-lg"
+                className="w-full p-5 rounded-2xl bg-[#161a21] text-white border border-white/5 focus:border-white/20 outline-none transition-all placeholder:text-white/10 text-lg"
                 value={passInput} 
                 onChange={(e) => setPassInput(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && passInput.trim() && (localStorage.setItem('chat_p_pass', passInput), setActivePass(passInput))}
